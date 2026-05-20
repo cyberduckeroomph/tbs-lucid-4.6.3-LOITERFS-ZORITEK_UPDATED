@@ -122,6 +122,11 @@ bool MAVLink_routing::check_and_forward(GCS_MAVLINK &in_link, const mavlink_mess
         return true;
     }
 
+    if (msg.msgid == MAVLINK_MSG_ID_GLOBAL_VISION_POSITION_ESTIMATE || msg.msgid ==
+        MAVLINK_MSG_ID_VISION_POSITION_ESTIMATE) {
+            return true;
+    }
+
     const bool from_private_channel = in_link.is_private();
 
     if (msg.msgid == MAVLINK_MSG_ID_HEARTBEAT) {
