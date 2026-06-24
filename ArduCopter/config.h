@@ -45,6 +45,10 @@
     # define ARMING_DELAY_SEC 2.0f
 #endif
 
+#ifndef FS_BRAKE_DECEL_RATE
+ # define FS_BRAKE_DECEL_RATE  80  // cm/s/s - плавне гальмування для failsafe
+#endif
+
 //////////////////////////////////////////////////////////////////////////////
 // FRAME_CONFIG
 //

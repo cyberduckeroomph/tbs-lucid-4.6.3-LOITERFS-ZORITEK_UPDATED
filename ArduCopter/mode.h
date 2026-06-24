@@ -1257,18 +1257,21 @@ public:
 
 protected:
 
-    const char *name() const override { return "LAND"; }
-    const char *name4() const override { return "LAND"; }
+    const char *name() const override { return "BRAKE"; }
+    const char *name4() const override { return "BRKE"; }
 
 private:
 
     void gps_run();
     void nogps_run();
+    void fs_brake_run();  // NEW: failsafe brake logic
 
     bool control_position; // true if we are using an external reference to control position
 
     uint32_t land_start_time;
     bool land_pause;
+    bool _fs_brake;
+    bool _fs_brake_exit;    
 };
 
 

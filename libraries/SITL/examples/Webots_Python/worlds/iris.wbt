@@ -57,6 +57,8 @@ Iris {
   controllerArgs [
     "--motors"
     "m1_motor, m2_motor, m3_motor, m4_motor"
+    "--sitl-address"
+    "192.168.117.3"
   ]
   extensionSlot [
   ]

@@ -3,6 +3,25 @@
 // land_init - initialise land controller
 bool ModeLand::init(bool ignore_checks)
 {
+    if (copter.failsafe.radio) {
+        _fs_brake = true;
+        _fs_brake_exit = false;
+        // ініціалізуємо pos_control для гальмування як ModeBrake
+        pos_control->set_max_speed_accel_xy(inertial_nav.get_velocity_neu_cms().length(), FS_BRAKE_DECEL_RATE);
+        pos_control->set_correction_speed_accel_xy(inertial_nav.get_velocity_neu_cms().length(), FS_BRAKE_DECEL_RATE);
+        pos_control->init_xy_controller();
+        pos_control->set_max_speed_accel_z(BRAKE_MODE_SPEED_Z, BRAKE_MODE_SPEED_Z, BRAKE_MODE_DECEL_RATE);
+        pos_control->set_correction_speed_accel_z(BRAKE_MODE_SPEED_Z, BRAKE_MODE_SPEED_Z, BRAKE_MODE_DECEL_RATE);
+        if (!pos_control->is_active_z()) {
+            pos_control->init_z_controller();
+        }
+        gcs().send_text(MAV_SEVERITY_WARNING, "LAND: FS brake init");
+        return true;
+    }
+
+    _fs_brake = false;
+    _fs_brake_exit = false;
+
     // check if we have GPS and decide which LAND we're going to do
     control_position = copter.position_ok();
 
@@ -53,10 +72,64 @@ bool ModeLand::init(bool ignore_checks)
 // should be called at 100hz or more
 void ModeLand::run()
 {
+    if (_fs_brake) {
+        fs_brake_run();
+        return;
+    }
     if (control_position) {
         gps_run();
     } else {
         nogps_run();
+    }
+}
+
+void ModeLand::fs_brake_run()
+{
+    // відкладений вихід — RC відновилось на попередньому циклі,
+    // тепер безпечно міняємо режим
+    if (_fs_brake_exit) {
+        _fs_brake_exit = false;
+        if (!copter.set_mode(Mode::Number::POSHOLD, ModeReason::RC_COMMAND)) {
+            copter.set_mode(Mode::Number::ALT_HOLD, ModeReason::RC_COMMAND);
+        }
+        return;
+    }
+
+    // RC відновився — плануємо вихід на наступному циклі
+    if (!copter.failsafe.radio) {
+        _fs_brake_exit = true;
+        return;
+    }
+
+    if (is_disarmed_or_landed()) {
+        make_safe_ground_handling();
+        pos_control->relax_z_controller(0.0f);
+        return;
+    }
+
+    motors->set_desired_spool_state(AP_Motors::DesiredSpoolState::THROTTLE_UNLIMITED);
+
+    if (copter.ap.land_complete_maybe) {
+        pos_control->soften_for_landing_xy();
+    }
+
+    // гальмуємо через pos_control
+    Vector2f vel;
+    Vector2f accel;
+    pos_control->input_vel_accel_xy(vel, accel);
+    pos_control->update_xy_controller();
+
+    attitude_control->input_thrust_vector_rate_heading(pos_control->get_thrust_vector(), 0.0f);
+
+    pos_control->set_pos_target_z_from_climb_rate_cm(0.0f);
+    pos_control->update_z_controller();
+
+    // коли загальмували — переходимо в POSHOLD або ALT_HOLD
+    const float speed_xy = inertial_nav.get_velocity_neu_cms().xy().length();
+    if (speed_xy < 50.0f) {
+        if (!copter.set_mode(Mode::Number::POSHOLD, ModeReason::RADIO_FAILSAFE)) {
+            copter.set_mode(Mode::Number::ALT_HOLD, ModeReason::RADIO_FAILSAFE);
+        }
     }
 }
 
@@ -91,7 +164,18 @@ void ModeLand::gps_run()
 //      pilot controls roll and pitch angles
 //      should be called at 100hz or more
 void ModeLand::nogps_run()
-{
+{    // TEST
+    if (copter.failsafe.radio) {
+        if (copter.position_ok()) {
+            gcs().send_text(MAV_SEVERITY_WARNING, "LAND: FS -> LOITER");
+            copter.set_mode(Mode::Number::LOITER, ModeReason::RADIO_FAILSAFE);
+        } else {
+            gcs().send_text(MAV_SEVERITY_WARNING, "LAND: FS -> ALT_HOLD");
+            copter.set_mode(Mode::Number::ALT_HOLD, ModeReason::RADIO_FAILSAFE);
+        }
+        return;
+    }
+
     float target_roll = 0.0f, target_pitch = 0.0f;
 
     // process pilot inputs
@@ -109,7 +193,6 @@ void ModeLand::nogps_run()
             // get pilot desired lean angles
             get_pilot_desired_lean_angles(target_roll, target_pitch, copter.aparm.angle_max, attitude_control->get_althold_lean_angle_max_cd());
         }
-
     }
 
     // disarm when the landing detector says we've landed

@@ -1,65 +1,115 @@
 -- rc_failsafe_loiter.lua
--- Intercepts ArduPilot RC failsafe LAND -> LOITER (or ALT_HOLD fallback)
+-- LAND (failsafe trigger) -> gradual attitude brake in GUIDED_NOGPS -> LOITER
 
-gcs:send_text(6, "FS: interceptor v5.2 loaded")
+gcs:send_text(6, "FS: brake interceptor v6.1 loaded")
 
 local MODE_LOITER      = 5
-local MODE_ALT_HOLD    = 2
+local MODE_GUIDED_NOGPS = 20
 local MODE_LAND        = 9
 local UPDATE_MS        = 200
-local HEARTBEAT_MS     = 10000
-local MODE_SET_WAIT_MS = 400
-local INTERCEPT_COOLDOWN = 2000
 
-local last_heartbeat        = 0
-local mode_set_at           = 0
-local pending_mode          = nil
+-- brake tuning
+local BRAKE_STEP_DEG   = 4.0   -- deg per tick (200ms) = 20 deg/s reduction rate
+local SPEED_THRESH_MS  = 1.2   -- m/s horizontal: safe to enter LOITER
+local LEVEL_THRESH_DEG = 2.5   -- deg: consider attitude zeroed
+
+-- cooldown between intercept attempts
+local INTERCEPT_COOLDOWN_MS = 3000
+
 local intercept_cooldown_ms = 0
 
-local function try_safe_hold()
-  if not vehicle:set_mode(MODE_LOITER) then
-    vehicle:set_mode(MODE_ALT_HOLD)
-    -- gcs:send_text(3, "FS: LOITER unavailable -> ALT_HOLD")
-    mode_set_at  = millis()
-    pending_mode = MODE_ALT_HOLD
+-- braking state
+local braking      = false
+local target_roll  = 0
+local target_pitch = 0
+local hold_yaw     = 0
+
+local function step_to_zero(val, step)
+  if val > step then
+    return val - step
+  elseif val < -step then
+    return val + step
+  end
+  return 0
+end
+
+local function start_brake()
+  hold_yaw     = math.deg(ahrs:get_yaw())
+  target_roll  = math.deg(ahrs:get_roll())
+  target_pitch = math.deg(ahrs:get_pitch())
+
+  -- switch mode and immediately override the level init state
+  -- both calls happen in the same Lua tick so flight controller
+  -- never sees the zero-attitude from angle_control_start()
+  if vehicle:set_mode(MODE_GUIDED_NOGPS) then
+    vehicle:set_target_angle_and_climbrate(
+      target_roll, target_pitch, hold_yaw, 0, false, 0)
+    braking = true
+    gcs:send_text(3, string.format(
+      "FS: brake start R=%.1f P=%.1f", target_roll, target_pitch))
   else
-    mode_set_at  = millis()
-    pending_mode = MODE_LOITER
+    -- GUIDED_NOGPS unavailable, fall back to LOITER directly
+    vehicle:set_mode(MODE_LOITER)
+    gcs:send_text(3, "FS: GUIDED_NOGPS failed, direct LOITER")
+  end
+end
+
+local function brake_step(now)
+  -- RC restored
+  if rc:has_valid_input() then
+    vehicle:set_mode(MODE_LOITER)
+    braking = false
+    intercept_cooldown_ms = now
+    gcs:send_text(6, "FS: RC restored -> LOITER")
+    return
+  end
+
+  -- ArduPilot re-triggered LAND while we are braking: push back to GUIDED_NOGPS
+  if vehicle:get_mode() == MODE_LAND then
+    vehicle:set_mode(MODE_GUIDED_NOGPS)
+  end
+
+  target_roll  = step_to_zero(target_roll,  BRAKE_STEP_DEG)
+  target_pitch = step_to_zero(target_pitch, BRAKE_STEP_DEG)
+
+  vehicle:set_target_angle_and_climbrate(
+    target_roll, target_pitch, hold_yaw, 0, false, 0)
+
+  -- switch to LOITER only when actually slow
+  local spd = ahrs:groundspeed_vector()
+  local speed = spd and spd:length() or 999
+
+  local attitude_zeroed = math.abs(target_roll)  < LEVEL_THRESH_DEG
+                       and math.abs(target_pitch) < LEVEL_THRESH_DEG
+
+  if attitude_zeroed and speed < SPEED_THRESH_MS then
+    vehicle:set_mode(MODE_LOITER)
+    braking = false
+    intercept_cooldown_ms = now
+    gcs:send_text(6, string.format(
+      "FS: braked -> LOITER (spd=%.1f)", speed))
   end
 end
 
 function update()
   local now = millis()
-  if not now then return update, UPDATE_MS end
-
-  -- heartbeat
-  if (now - last_heartbeat) >= HEARTBEAT_MS then
-    last_heartbeat = now
-    -- gcs:send_text(6, "FS: interceptor active, armed=" .. tostring(arming:is_armed()))
-  end
 
   if not arming:is_armed() then
-    pending_mode            = nil
-    mode_set_at             = 0
-    intercept_cooldown_ms   = 0
+    braking = false
+    intercept_cooldown_ms = 0
     return update, UPDATE_MS
   end
 
-  -- check pending mode_set result
-  if pending_mode == MODE_LOITER and (now - mode_set_at) >= MODE_SET_WAIT_MS then
-    if vehicle:get_mode() ~= MODE_LOITER then
-      vehicle:set_mode(MODE_ALT_HOLD)
-      -- gcs:send_text(3, "FS: LOITER failed -> ALT_HOLD")
-    end
-    pending_mode = nil
+  if braking then
+    brake_step(now)
+    return update, UPDATE_MS
   end
 
   -- intercept LAND with cooldown
   if vehicle:get_mode() == MODE_LAND then
-    if (now - intercept_cooldown_ms) >= INTERCEPT_COOLDOWN then
+    if (now - intercept_cooldown_ms) >= INTERCEPT_COOLDOWN_MS then
       intercept_cooldown_ms = now
-      try_safe_hold()
-      -- gcs:send_text(3, "FS: LAND intercepted -> LOITER")
+      start_brake()
     end
   end
 
