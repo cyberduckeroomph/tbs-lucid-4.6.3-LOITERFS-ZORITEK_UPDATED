@@ -266,7 +266,9 @@ bool AP_RCProtocol_CRSF::check_frame(uint32_t timestamp_us)
         return true;
     }
 
-    if (_frame.device_address != DeviceAddress::CRSF_ADDRESS_FLIGHT_CONTROLLER) {
+    if ((_frame.device_address != DeviceAddress::CRSF_ADDRESS_FLIGHT_CONTROLLER) && 
+        (_frame.device_address != DeviceAddress::CRSF_ADDRESS_CRSF_TRANSMITTER) && 
+        (_frame.device_address != DeviceAddress::CRSF_ADDRESS_RADIO_TRANSMITTER)) {
         return false;
     }
 
