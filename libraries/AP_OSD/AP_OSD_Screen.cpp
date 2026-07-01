@@ -2463,24 +2463,13 @@ void AP_OSD_Screen::draw_pluscode(uint8_t x, uint8_t y)
  */
 void AP_OSD_Screen::draw_callsign(uint8_t x, uint8_t y)
 {
-#if AP_OSD_CALLSIGN_FROM_SD_ENABLED
     if (!callsign_data.load_attempted) {
         callsign_data.load_attempted = true;
-        FileData *fd = AP::FS().load_file("callsign.txt");
-        if (fd != nullptr) {
-            uint32_t len = fd->length;
-            // trim off whitespace
-            while (len > 0 && isspace(fd->data[len-1])) {
-                len--;
-            }
-            callsign_data.str = strndup((const char *)fd->data, len);
-            delete fd;
-        }
+        callsign_data.str = strdup("STARK");
     }
     if (callsign_data.str != nullptr) {
         backend->write(x, y, false, "%s", callsign_data.str);
     }
-#endif
 }
 
 void AP_OSD_Screen::draw_current2(uint8_t x, uint8_t y)
