@@ -1,0 +1,110 @@
+diff --git a/libraries/AP_RCProtocol/AP_RCProtocol_CRSF.cpp b/libraries/AP_RCProtocol/AP_RCProtocol_CRSF.cpp
+index b5fee58..d341009 100644
+--- a/libraries/AP_RCProtocol/AP_RCProtocol_CRSF.cpp
++++ b/libraries/AP_RCProtocol/AP_RCProtocol_CRSF.cpp
+@@ -592,13 +592,15 @@ void AP_RCProtocol_CRSF::process_link_stats_frame(const void* data)
+         _link_status.rssi = derive_scaled_lq_value(link->uplink_status);
+     } else{
+         // AP rssi: -1 for unknown, 0 for no link, 255 for maximum link
+-        if (rssi_dbm < 50) {
++        if (_link_status.link_quality <= 0){
++            _link_status.rssi = 0;
++        } else if (rssi_dbm <= 50) {
+             _link_status.rssi = 255;
+-        } else if (rssi_dbm > 120) {
++        } else if (rssi_dbm >= 130) {
+             _link_status.rssi = 0;
+         } else {
+-            // this is an approximation recommended by Remo from TBS
+-            _link_status.rssi = int16_t(roundf((1.0f - (rssi_dbm - 50.0f) / 70.0f) * 255.0f));
++            // this is an approximation recommended by Remo from TBS, adjusted to -130 by astr0
++            _link_status.rssi = int16_t(roundf((1.0f - (rssi_dbm - 50.0f) / 80.0f) * 255.0f));
+         }
+     }
+ 
+diff --git a/libraries/GCS_MAVLink/GCS_Common.cpp b/libraries/GCS_MAVLink/GCS_Common.cpp
+index d5a75d6..57b5ccd 100644
+--- a/libraries/GCS_MAVLink/GCS_Common.cpp
++++ b/libraries/GCS_MAVLink/GCS_Common.cpp
+@@ -106,6 +106,9 @@
+ #include <AP_RCProtocol/AP_RCProtocol_config.h>
+ #if AP_RCPROTOCOL_ENABLED
+ #include <AP_RCProtocol/AP_RCProtocol.h>
++#if AP_RCPROTOCOL_CRSF_ENABLED
++#include <AP_RCProtocol/AP_RCProtocol_CRSF.h>
++#endif
+ #endif
+ 
+ #if HAL_WITH_IO_MCU
+@@ -6020,6 +6023,25 @@ void GCS_MAVLINK::send_sys_status()
+         battery_current = -1;
+     }
+ #endif
++#if AP_RSSI_ENABLED
++    AP_RSSI* rssi = AP::rssi();
++    float link_quality = rssi != nullptr ? constrain_float(rssi->read_receiver_link_quality(), 0, 100) : 0;
++#endif
++#if AP_RCPROTOCOL_ENABLED && AP_RCPROTOCOL_CRSF_ENABLED && AP_OSD_LINK_STATS_EXTENSIONS_ENABLED
++    AP_RCProtocol_CRSF* crsf = AP::crsf();
++    int16_t tx_power;
++    int8_t snr;
++    if (crsf != nullptr){
++        tx_power = crsf->get_link_status().tx_power;
++#if AP_RSSI_ENABLED
++        link_quality = crsf->get_link_status().link_quality;
++#endif
++        snr = crsf->get_link_status().snr;
++    } else {
++        tx_power = 0;
++        snr = 0;
++    }
++#endif
+ 
+     uint32_t control_sensors_present;
+     uint32_t control_sensors_enabled;
+@@ -6031,17 +6053,21 @@ void GCS_MAVLINK::send_sys_status()
+     const uint16_t errors1 = errors & 0xffff;
+     const uint16_t errors2 = (errors>>16) & 0xffff;
+     const uint16_t errors4 = AP::internalerror().count() & 0xffff;
++#if !AP_OSD_LINK_STATS_EXTENSIONS_ENABLED
+     uint16_t errors_comm = 0;
+     mavlink_status_t *ms = mavlink_get_channel_status(chan);
+     if (ms) {
+         errors_comm = ms->packet_rx_drop_count;
+     }
++#endif
+ 
++#if !AP_OSD_LINK_STATS_EXTENSIONS_ENABLED
+ #if HAL_LOGGING_ENABLED
+     const uint16_t dropped_logmessage_count = AP::logger().num_dropped();
+ #else
+     const uint16_t dropped_logmessage_count = UINT16_MAX;
+ #endif  // HAL_LOGGING_ENABLED
++#endif
+ 
+     mavlink_msg_sys_status_send(
+         chan,
+@@ -6062,11 +6088,23 @@ void GCS_MAVLINK::send_sys_status()
+         -1,
+         -1,
+ #endif
++#if AP_RSSI_ENABLED
++        (100.0f - link_quality) * 100,  // comm drops %,
++#else
+         0,  // comm drops %,
++#endif
++#if AP_OSD_LINK_STATS_EXTENSIONS_ENABLED
++        tx_power,
++#else
+         errors_comm,  // comm drops in pkts,
++#endif
+         errors1,
+         errors2,
++#if AP_OSD_LINK_STATS_EXTENSIONS_ENABLED
++        snr,
++#else
+         dropped_logmessage_count,  // errors3
++#endif
+         errors4,  // errors4
+         0,  // control_sensors_present2,
+         0,  // control_sensors_enabled2,

@@ -600,13 +600,15 @@ void AP_RCProtocol_CRSF::process_link_stats_frame(const void* data)
         _link_status.rssi = derive_scaled_lq_value(link->uplink_status);
     } else{
         // AP rssi: -1 for unknown, 0 for no link, 255 for maximum link
-        if (rssi_dbm < 50) {
+        if (_link_status.link_quality <= 0){
+            _link_status.rssi = 0;
+        } else if (rssi_dbm <= 50) {
             _link_status.rssi = 255;
-        } else if (rssi_dbm > 120) {
+        } else if (rssi_dbm >= 130) {
             _link_status.rssi = 0;
         } else {
-            // this is an approximation recommended by Remo from TBS
-            _link_status.rssi = int16_t(roundf((1.0f - (rssi_dbm - 50.0f) / 70.0f) * 255.0f));
+            // this is an approximation recommended by Remo from TBS, adjusted to -130 by astr0
+            _link_status.rssi = int16_t(roundf((1.0f - (rssi_dbm - 50.0f) / 80.0f) * 255.0f));
         }
     }
 

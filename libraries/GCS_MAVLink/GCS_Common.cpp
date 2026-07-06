@@ -103,6 +103,9 @@
 #include <AP_RCProtocol/AP_RCProtocol_config.h>
 #if AP_RCPROTOCOL_ENABLED
 #include <AP_RCProtocol/AP_RCProtocol.h>
+#if AP_RCPROTOCOL_CRSF_ENABLED
+#include <AP_RCProtocol/AP_RCProtocol_CRSF.h>
+#endif
 #endif
 
 #if HAL_WITH_IO_MCU
@@ -5763,6 +5766,25 @@ void GCS_MAVLINK::send_sys_status()
         battery_current = -1;
     }
 #endif
+#if AP_RSSI_ENABLED
+    AP_RSSI* rssi = AP::rssi();
+    float link_quality = rssi != nullptr ? constrain_float(rssi->read_receiver_link_quality(), 0, 100) : 0;
+#endif
+#if AP_RCPROTOCOL_ENABLED && AP_RCPROTOCOL_CRSF_ENABLED && AP_OSD_LINK_STATS_EXTENSIONS_ENABLED
+    AP_RCProtocol_CRSF* crsf = AP::crsf();
+    int16_t tx_power;
+    int8_t snr;
+    if (crsf != nullptr){
+        tx_power = crsf->get_link_status().tx_power;
+#if AP_RSSI_ENABLED
+        link_quality = crsf->get_link_status().link_quality;
+#endif
+        snr = crsf->get_link_status().snr;
+    } else {
+        tx_power = 0;
+        snr = 0;
+    }
+#endif
 
     uint32_t control_sensors_present;
     uint32_t control_sensors_enabled;
@@ -5794,11 +5816,23 @@ void GCS_MAVLINK::send_sys_status()
         -1,
         -1,
 #endif
+#if AP_RSSI_ENABLED
+        (100.0f - link_quality) * 100,  // comm drops %,
+#else
         0,  // comm drops %,
+#endif
+#if AP_OSD_LINK_STATS_EXTENSIONS_ENABLED
+        tx_power,
+#else
         0,  // comm drops in pkts,
+#endif
         errors1,
         errors2,
+#if AP_OSD_LINK_STATS_EXTENSIONS_ENABLED
+        snr,
+#else
         0,  // errors3
+#endif
         errors4); // errors4
 }
 
